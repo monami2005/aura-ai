@@ -11,7 +11,6 @@ class PermissionManager:
     SAFE_ACTIONS = {
         "chat",
         "web_search",
-        "take_screenshot",
         "analyze_screen",
         "analyze_error",
         "explain_code",
@@ -26,12 +25,16 @@ class PermissionManager:
         "type_text",
         "press_key",
         "scroll_screen",
+        "take_screenshot",
         "open_application",
         "open_website",
+        "web_search_browser",
         "create_folder",
         "rename_file",
         "move_file",
         "organize_files",
+        "apply_code_fix",
+        "safe_code_edit",
     }
 
     HIGH_RISK_ACTIONS = {
@@ -77,8 +80,14 @@ class PermissionManager:
                 reason = f"Launching external application '{params.get('app_name', 'application')}' requires confirmation."
             elif act == "open_website":
                 reason = f"Navigating browser to '{params.get('url', 'website')}' requires confirmation."
+            elif act == "web_search_browser":
+                reason = f"Opening browser to search for '{params.get('query', '')}' requires confirmation."
+            elif act == "take_screenshot":
+                reason = "Capturing and saving a desktop screenshot to disk requires confirmation."
             elif act in ("create_folder", "rename_file", "move_file"):
                 reason = "Modifying local file system items requires confirmation."
+            elif act in ("apply_code_fix", "safe_code_edit"):
+                reason = "Modifying source code requires explicit confirmation before applying changes."
             else:
                 reason = "Action mutates system state and requires confirmation."
             return ActionRiskLevel.CONFIRM, True, reason

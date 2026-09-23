@@ -5,6 +5,14 @@ import shutil
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
+# Configure UTF-8 stdout for Windows consoles
+if hasattr(sys.stdout, "reconfigure"):
+    try:
+        sys.stdout.reconfigure(encoding="utf-8")
+        sys.stderr.reconfigure(encoding="utf-8")
+    except Exception:
+        pass
+
 # Add backend to path
 sys.path.insert(0, str(Path(__file__).parent))
 

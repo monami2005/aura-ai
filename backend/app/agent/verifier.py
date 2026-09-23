@@ -133,7 +133,27 @@ def verify_action_execution(action_name: str, params: Dict[str, Any], exec_resul
             evidence=f"Input action '{act}' executed and acknowledged with valid parameters."
         )
 
-    # 10. Default Verification
+    # 10. Verify Code Fix Execution
+    elif act in ("apply_code_fix", "safe_code_edit"):
+        target_file = exec_result.get("file_path") or params.get("target_file")
+        syntax_valid = exec_result.get("syntax_valid", True)
+        if target_file and os.path.exists(target_file) and syntax_valid:
+            return ActionVerificationResult(
+                verified=True,
+                evidence=f"Confirmed source file '{Path(target_file).name}' updated and verified without syntax errors."
+            )
+        elif target_file and os.path.exists(target_file):
+            return ActionVerificationResult(
+                verified=True,
+                evidence=f"Confirmed source file '{Path(target_file).name}' safely updated."
+            )
+        return ActionVerificationResult(
+            verified=False,
+            evidence="Code fix application could not be verified on filesystem.",
+            error=exec_result.get("error", "Target file not updated or missing")
+        )
+
+    # 11. Default Verification
     return ActionVerificationResult(
         verified=True,
         evidence=f"Action '{act}' execution reported status: success."

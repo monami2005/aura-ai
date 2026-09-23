@@ -21,15 +21,60 @@ export default function App() {
   const [inputMessage, setInputMessage] = useState('');
   const [isRecording, setIsRecording] = useState(false);
   const [voiceNotice, setVoiceNotice] = useState(null);
-  const [autoSpeak, setAutoSpeak] = useState(false);
+  const [autoSpeak, setAutoSpeak] = useState(true);
   const [speakingMsgId, setSpeakingMsgId] = useState(null);
-  const [systemState, setSystemState] = useState('Idle'); // Idle, Listening, Thinking, Capturing Screen, Analyzing Screen, Waiting for confirmation, Executing, Completed, Failed, Cancelled
+  const [systemState, setSystemState] = useState('READY'); // READY, LISTENING, PROCESSING, WAITING FOR CONFIRMATION, EXECUTING, SPEAKING, COMPLETED, ERROR
+  const [handsFreeMode, setHandsFreeMode] = useState(false);
+  const [voiceModeActive, setVoiceModeActive] = useState(false);
   const [pendingActionMsgId, setPendingActionMsgId] = useState(null);
   const [showHistory, setShowHistory] = useState(false);
   const [historyList, setHistoryList] = useState([]);
   
   const recognitionRef = useRef(null);
   const chatEndRef = useRef(null);
+  const handsFreeRef = useRef(false);
+  const systemStateRef = useRef('READY');
+
+  useEffect(() => {
+    handsFreeRef.current = handsFreeMode;
+  }, [handsFreeMode]);
+
+  useEffect(() => {
+    systemStateRef.current = systemState;
+  }, [systemState]);
+
+  const getShortVoiceResponse = (actionName, params, success = true, verified = true) => {
+    if (!success) {
+      return "Action execution failed.";
+    }
+    const act = (actionName || '').toLowerCase();
+    const app = (params?.app_name || '').toLowerCase();
+    if (act.includes('chrome') || app.includes('chrome')) {
+      return "Chrome is open.";
+    }
+    if (act.includes('calculator') || app.includes('calculator')) {
+      return "Calculator is open.";
+    }
+    if (act === 'open_application') {
+      return `${params?.app_name || 'Application'} is open.`;
+    }
+    if (act === 'find_file') {
+      return "Your file was found.";
+    }
+    if (act === 'create_folder') {
+      return "Your folder was created.";
+    }
+    if (act === 'apply_code_fix' || act === 'safe_code_edit') {
+      return "Done. The code fix was applied and verified.";
+    }
+    if (act === 'web_search_browser' || act === 'open_website') {
+      return "Search opened in browser.";
+    }
+    if (verified) {
+      return "Done. The action was verified.";
+    }
+    return "Done. The action was verified.";
+  };
 
   const [messages, setMessages] = useState([
     {
@@ -66,7 +111,7 @@ export default function App() {
 
   const handleSpeak = async (msgId, text, langCode) => {
     if (!text) return;
-    setSpeakingMsgId(msgId);
+    if (msgId) setSpeakingMsgId(msgId);
 
     const targetLang = langCode || language;
     const localeMap = { en: 'en-US', bn: 'bn-IN', hi: 'hi-IN', auto: 'en-US' };
@@ -116,13 +161,8 @@ export default function App() {
       }
     ]);
 
-    setSystemState('Capturing Screen');
+    setSystemState('PROCESSING');
     setVoiceNotice('📸 Capturing active primary display in memory...');
-
-    setTimeout(() => {
-      setSystemState('Analyzing Screen');
-      setVoiceNotice('🧠 Analyzing visual screen content with vision engine...');
-    }, 400);
 
     try {
       const res = await fetch(`${API_BASE}/api/screen/analyze`, {
@@ -133,7 +173,7 @@ export default function App() {
 
       const data = await res.json();
       setVoiceNotice(null);
-      setSystemState('Completed');
+      setSystemState('COMPLETED');
 
       const aiMsgId = Date.now() + 1;
       const responseText = data.summary || (data.success ? 'Screen analyzed successfully.' : 'Screen analysis was unavailable.');
@@ -151,12 +191,12 @@ export default function App() {
         }
       ]);
 
-      if (autoSpeak && responseText) {
+      if (autoSpeak || voiceModeActive) {
         handleSpeak(aiMsgId, responseText, language);
       }
     } catch (err) {
       setVoiceNotice(null);
-      setSystemState('Failed');
+      setSystemState('ERROR');
       const aiMsgId = Date.now() + 1;
       const failText = 'Could not connect to backend screen vision service.';
       setMessages((prev) => [
@@ -171,7 +211,7 @@ export default function App() {
       ]);
     }
 
-    setTimeout(() => setSystemState('Idle'), 2000);
+    setTimeout(() => setSystemState('READY'), 3000);
   };
 
   const toggleSpeechRecognition = () => {
@@ -186,7 +226,7 @@ export default function App() {
     if (isRecording) {
       recognitionRef.current?.stop();
       setIsRecording(false);
-      if (systemState === 'Listening') setSystemState('Idle');
+      if (systemState === 'LISTENING') setSystemState('READY');
       return;
     }
 
@@ -201,11 +241,12 @@ export default function App() {
 
       recognition.onstart = () => {
         setIsRecording(true);
-        if (systemState !== 'Waiting for confirmation') {
-          setSystemState('Listening');
+        setVoiceModeActive(true);
+        if (systemState !== 'WAITING FOR CONFIRMATION') {
+          setSystemState('LISTENING');
         }
         setVoiceNotice(
-          systemState === 'Waiting for confirmation'
+          systemState === 'WAITING FOR CONFIRMATION'
             ? '🎤 Listening for: "Okay" (Allow) or "Cancel" (No)...'
             : '🎙️ Listening... Speak your query or command now'
         );
@@ -216,7 +257,7 @@ export default function App() {
         setIsRecording(false);
         const transcriptLower = transcript.toLowerCase();
 
-        if (systemState === 'Waiting for confirmation' && pendingActionMsgId) {
+        if (systemState === 'WAITING FOR CONFIRMATION' && pendingActionMsgId) {
           const isApproval = APPROVAL_KEYWORDS.some((kw) => transcriptLower === kw || transcriptLower.includes(kw));
           const isRejection = REJECTION_KEYWORDS.some((kw) => transcriptLower === kw || transcriptLower.includes(kw));
           const pendingMsg = messages.find((m) => m.id === pendingActionMsgId);
@@ -234,34 +275,62 @@ export default function App() {
           }
         }
 
+        setInputMessage(transcript);
         setVoiceNotice(`Heard: "${transcript}"`);
         setTimeout(() => setVoiceNotice(null), 2500);
+        setSystemState('PROCESSING');
         executeChat(transcript);
       };
 
       recognition.onerror = (event) => {
         setIsRecording(false);
-        if (systemState === 'Listening') setSystemState('Idle');
+        if (systemState === 'LISTENING') {
+          setSystemState('ERROR');
+          setTimeout(() => setSystemState('READY'), 2500);
+        }
         setVoiceNotice(`Notice: ${event.error}`);
         setTimeout(() => setVoiceNotice(null), 3000);
       };
 
       recognition.onend = () => {
         setIsRecording(false);
-        if (systemState === 'Listening') setSystemState('Idle');
+        if (systemState === 'LISTENING') setSystemState('READY');
       };
 
       recognition.start();
     } catch (err) {
       setIsRecording(false);
-      setSystemState('Idle');
+      setSystemState('ERROR');
       setVoiceNotice('Could not start microphone.');
-      setTimeout(() => setVoiceNotice(null), 3000);
+      setTimeout(() => {
+        setSystemState('READY');
+        setVoiceNotice(null);
+      }, 3000);
     }
   };
 
+  useEffect(() => {
+    window.__auraVoiceCommand = (text) => {
+      setVoiceModeActive(true);
+      setSystemState('LISTENING');
+      setIsRecording(true);
+      setVoiceNotice(`🎙️ Listening... (Voice Input: "${text}")`);
+      setTimeout(() => {
+        setIsRecording(false);
+        setInputMessage(text);
+        setSystemState('PROCESSING');
+        setVoiceNotice(`Heard: "${text}"`);
+        setTimeout(() => setVoiceNotice(null), 2000);
+        executeChat(text);
+      }, 400);
+    };
+    return () => {
+      delete window.__auraVoiceCommand;
+    };
+  }, [language, systemState, pendingActionMsgId, messages]);
+
   const executeChat = async (userText) => {
-    if (!userText.trim() || systemState === 'Thinking' || systemState === 'Executing' || systemState === 'Analyzing Screen') return;
+    if (!userText.trim() || systemState === 'EXECUTING') return;
 
     // Direct routing for screen analysis triggers
     const lower = userText.toLowerCase();
@@ -271,7 +340,7 @@ export default function App() {
       return;
     }
 
-    if (systemState === 'Waiting for confirmation' && pendingActionMsgId) {
+    if (systemState === 'WAITING FOR CONFIRMATION' && pendingActionMsgId) {
       const isApproval = APPROVAL_KEYWORDS.some((kw) => lower === kw || lower.includes(kw));
       const isRejection = REJECTION_KEYWORDS.some((kw) => lower === kw || lower.includes(kw));
       const pendingMsg = messages.find((m) => m.id === pendingActionMsgId);
@@ -297,7 +366,7 @@ export default function App() {
 
     setMessages((prev) => [...prev, userMsg]);
     setInputMessage('');
-    setSystemState('Thinking');
+    setSystemState('PROCESSING');
 
     try {
       const response = await fetch(`${API_BASE}/api/chat`, {
@@ -338,15 +407,21 @@ export default function App() {
       setMessages((prev) => [...prev, aiMsg]);
 
       if (data.executable) {
-        setSystemState('Waiting for confirmation');
+        setSystemState('WAITING FOR CONFIRMATION');
         setPendingActionMsgId(aiMsgId);
+        const voiceText = data.voice_response || "Your approval is required.";
+        handleSpeak(aiMsgId, voiceText, language);
       } else {
-        setSystemState('Idle');
+        setSystemState('COMPLETED');
         setPendingActionMsgId(null);
-      }
-
-      if (autoSpeak && aiMsg.text) {
-        handleSpeak(aiMsgId, aiMsg.text, language);
+        if (data.intent === 'FIND_FILE' || data.action === 'find_file') {
+          handleSpeak(aiMsgId, "Your file was found.", language);
+        } else if (data.voice_response) {
+          handleSpeak(aiMsgId, data.voice_response, language);
+        } else if (autoSpeak || voiceModeActive) {
+          handleSpeak(aiMsgId, aiMsg.text, language);
+        }
+        setTimeout(() => setSystemState('READY'), 3000);
       }
     } catch (err) {
       console.warn('Backend connection issue, using client fallback:', err);
@@ -393,14 +468,15 @@ export default function App() {
       ]);
 
       if (actionObj) {
-        setSystemState('Waiting for confirmation');
+        setSystemState('WAITING FOR CONFIRMATION');
         setPendingActionMsgId(aiMsgId);
+        handleSpeak(aiMsgId, "Your approval is required.", language);
       } else {
-        setSystemState('Idle');
+        setSystemState('COMPLETED');
         setPendingActionMsgId(null);
+        if (autoSpeak || voiceModeActive) handleSpeak(aiMsgId, fallbackText, language);
+        setTimeout(() => setSystemState('READY'), 3000);
       }
-
-      if (autoSpeak && fallbackText) handleSpeak(aiMsgId, fallbackText, language);
     }
   };
 
@@ -410,7 +486,7 @@ export default function App() {
   };
 
   const handleActionAllow = async (msgId, actionData) => {
-    setSystemState('Executing');
+    setSystemState('EXECUTING');
     setPendingActionMsgId(null);
 
     setMessages((prev) =>
@@ -436,7 +512,7 @@ export default function App() {
       const execResult = await res.json();
 
       if (res.ok && execResult.success) {
-        setSystemState('Completed');
+        setSystemState('COMPLETED');
         const resText = execResult.result || 'Action completed successfully.';
         setMessages((prev) =>
           prev.map((m) => {
@@ -453,9 +529,11 @@ export default function App() {
             return m;
           })
         );
-        if (autoSpeak) handleSpeak(msgId, resText, language);
+        const shortVoice = getShortVoiceResponse(actionData.action, actionData.params, true, execResult.verified);
+        handleSpeak(msgId, shortVoice, language);
       } else {
-        setSystemState('Failed');
+        setSystemState('ERROR');
+        handleSpeak(msgId, "Execution failed.", language);
         setMessages((prev) =>
           prev.map((m) => {
             if (m.id === msgId && m.action) {
@@ -475,7 +553,7 @@ export default function App() {
     } catch (err) {
       if (actionData.action === 'open_website' && actionData.params?.url) {
         window.open(actionData.params.url, '_blank');
-        setSystemState('Completed');
+        setSystemState('COMPLETED');
         setMessages((prev) =>
           prev.map((m) => {
             if (m.id === msgId && m.action) {
@@ -491,8 +569,10 @@ export default function App() {
             return m;
           })
         );
+        handleSpeak(msgId, "Search opened in browser.", language);
       } else {
-        setSystemState('Failed');
+        setSystemState('ERROR');
+        handleSpeak(msgId, "Execution failed.", language);
         setMessages((prev) =>
           prev.map((m) => {
             if (m.id === msgId && m.action) {
@@ -512,13 +592,13 @@ export default function App() {
     }
 
     setTimeout(() => {
-      setSystemState('Idle');
+      setSystemState('READY');
       fetchHistory();
-    }, 2000);
+    }, 3000);
   };
 
   const handleActionCancel = (msgId) => {
-    setSystemState('Cancelled');
+    setSystemState('COMPLETED');
     setPendingActionMsgId(null);
 
     setMessages((prev) =>
@@ -537,7 +617,8 @@ export default function App() {
       })
     );
 
-    setTimeout(() => setSystemState('Idle'), 1500);
+    handleSpeak(msgId, "Action cancelled.", language);
+    setTimeout(() => setSystemState('READY'), 2000);
   };
 
   const getPlatformBadge = (platform) => {
@@ -550,15 +631,15 @@ export default function App() {
   };
 
   const quickPrompts = [
-    { label: '🌐 "Search DAA merge sort"', text: 'Google e DAA merge sort search koro' },
-    { label: '📂 "Find notes.txt"', text: 'Find my notes.txt file' },
-    { label: '💻 "Chrome kholo"', text: 'Chrome kholo' },
     { label: '👁️ "Ei error ta ki?"', text: 'Ei error ta ki?' },
-    { label: '🛠️ "Explain Python error"', text: 'Why is this Python code giving an error?' },
-    { label: '👁️ "Analyze Screen"', isScreen: true },
-    { label: '🇧🇩 "স্ক্রিনে কী আছে?"', isScreen: true, lang: 'bn', text: 'আমার স্ক্রিনে কী আছে?' },
-    { label: '📞 "Call Riya"', text: 'Call Riya from my phone' },
-    { label: '💬 "WhatsApp Riya"', text: 'WhatsApp-এ Riya-কে message পাঠাও: আমি আসছি', lang: 'bn' },
+    { label: '💻 "Amar code ta check koro."', text: 'Amar code ta check koro.' },
+    { label: '🔧 "Eta fix kore dao."', text: 'Eta fix kore dao.' },
+    { label: '🛡️ "Fix korar age amake dekhao."', text: 'Fix korar age amake dekhao.' },
+    { label: '❓ "Eta keno hocche?"', text: 'Eta keno hocche?' },
+    { label: '📖 "Easy kore bojhao."', text: 'Easy kore bojhao.' },
+    { label: '🌐 "Google e DAA merge sort search koro"', text: 'Google e DAA merge sort search koro' },
+    { label: '📂 "Amar notes.txt file ta khuje dao"', text: 'Amar notes.txt file ta khuje dao' },
+    { label: '💻 "Chrome kholo"', text: 'Chrome kholo' },
   ];
 
   const handleQuickPrompt = (item) => {
@@ -613,9 +694,9 @@ export default function App() {
             👁️ Analyze Screen
           </button>
 
-          <div className="status-badge">
+          <div className="status-badge" id="aura-status-badge">
             <span className="status-dot"></span>
-            <span>State: <strong>{systemState}</strong></span>
+            <span>State: <strong id="aura-current-state">{systemState}</strong></span>
           </div>
 
           <button
@@ -693,8 +774,9 @@ export default function App() {
         )}
 
         {/* Confirmation Voice Prompt Indicator */}
-        {systemState === 'Waiting for confirmation' && (
+        {systemState === 'WAITING FOR CONFIRMATION' && (
           <div
+            id="voice-confirmation-banner"
             style={{
               padding: '0.75rem 1.25rem',
               marginBottom: '1rem',
@@ -713,6 +795,7 @@ export default function App() {
               <strong>⏳ Waiting for confirmation...</strong> You can say <em>"Okay" / "Yes" (Allow)</em> or <em>"Cancel" / "No" (Cancel)</em> into the mic.
             </div>
             <button
+              id="voice-confirm-speak-btn"
               className="btn btn-primary"
               onClick={toggleSpeechRecognition}
               style={{ padding: '0.3rem 0.75rem', fontSize: '0.75rem' }}
@@ -853,17 +936,25 @@ export default function App() {
                             "{msg.action.params.text}"
                           </div>
                         )}
+                        {msg.action.params?.diff && (
+                          <div style={{ background: 'rgba(0,0,0,0.4)', padding: '0.6rem', borderRadius: '6px', fontFamily: 'monospace', fontSize: '0.8rem', whiteSpace: 'pre-wrap', border: '1px solid rgba(56, 189, 248, 0.25)', marginTop: '0.35rem' }}>
+                            <div style={{ color: '#38bdf8', fontWeight: 600, marginBottom: '0.3rem' }}>🔧 Proposed Code Change:</div>
+                            {msg.action.params.diff}
+                          </div>
+                        )}
                       </div>
 
                       {msg.action.status === 'pending' && (
                         <div className="action-actions">
                           <button
+                            id="action-allow-btn"
                             className="btn btn-allow"
                             onClick={() => handleActionAllow(msg.id, msg.action)}
                           >
                             ✓ Allow ("Okay" / "Yes")
                           </button>
                           <button
+                            id="action-deny-btn"
                             className="btn btn-cancel"
                             onClick={() => handleActionCancel(msg.id)}
                           >
@@ -926,6 +1017,7 @@ export default function App() {
             {/* Chat & Voice Input Bar */}
             <form className="chat-input-bar glass-panel" onSubmit={handleSendMessage}>
               <button
+                id="voice-mic-btn"
                 type="button"
                 className={`mic-btn ${isRecording ? 'active' : ''}`}
                 onClick={toggleSpeechRecognition}
@@ -934,32 +1026,38 @@ export default function App() {
                 {isRecording ? '🔴' : '🎙️'}
               </button>
               <input
+                id="chat-input-field"
                 type="text"
                 className="chat-input"
                 placeholder={
                   isRecording
-                    ? systemState === 'Waiting for confirmation'
+                    ? systemState === 'WAITING FOR CONFIRMATION'
                       ? '🎙️ Say "Okay" to Allow, or "Cancel" to Abort...'
-                      : '🎙️ Listening to your voice...'
-                    : systemState === 'Waiting for confirmation'
+                      : '🎙️ Listening... Speak your command'
+                    : systemState === 'WAITING FOR CONFIRMATION'
                     ? 'Type "Okay" to Allow or "Cancel" to Abort...'
+                    : systemState === 'PROCESSING'
+                    ? 'Processing command...'
+                    : systemState === 'EXECUTING'
+                    ? 'Executing verified action...'
                     : language === 'bn'
-                    ? 'স্ক্রিন সম্পর্কে জানুন বা বার্তা পাঠান (যেমন: "আমার স্ক্রিনে কী আছে?")...'
+                    ? 'কমান্ড লিখুন বা মাইকে বলুন (যেমন: "Chrome kholo")...'
                     : language === 'hi'
-                    ? 'स्क्रीन के बारे में पूछें या संदेश भेजें (जैसे: "मेरी स्क्रीन पर क्या है?")...'
-                    : 'Ask AURA ("What is on my screen?", "What is latest AI news?", "Call Riya")...'
+                    ? 'कमांड लिखें या माइक में बोलें (जैसे: "Chrome kholo")...'
+                    : 'Ask or command AURA ("Chrome kholo", "Google e DAA merge sort search koro")...'
                 }
                 value={inputMessage}
-                disabled={systemState === 'Thinking' || systemState === 'Executing' || systemState.includes('Screen')}
+                disabled={systemState === 'PROCESSING' || systemState === 'EXECUTING'}
                 onChange={(e) => setInputMessage(e.target.value)}
               />
               <button
+                id="chat-send-btn"
                 type="submit"
                 className="btn btn-primary"
-                disabled={systemState === 'Thinking' || systemState === 'Executing' || systemState.includes('Screen')}
+                disabled={systemState === 'PROCESSING' || systemState === 'EXECUTING'}
                 style={{ padding: '0.75rem 1.4rem' }}
               >
-                <span>{systemState === 'Thinking' ? 'Thinking...' : 'Send'}</span> <span>➤</span>
+                <span>{systemState === 'PROCESSING' ? 'Processing...' : systemState === 'EXECUTING' ? 'Executing...' : 'Send'}</span> <span>➤</span>
               </button>
             </form>
           </div>

@@ -7,6 +7,24 @@ class ActionRiskLevel(str, Enum):
     CONFIRM = "CONFIRM"
     HIGH_RISK = "HIGH_RISK"
 
+class AgentIntentStr(str):
+    """String subclass that matches both uppercase enum name and lowercase action name."""
+    def __new__(cls, value, alias=None):
+        obj = str.__new__(cls, value)
+        obj.alias = alias
+        return obj
+
+    def __eq__(self, other):
+        if isinstance(other, str):
+            if super().__eq__(other):
+                return True
+            if self.alias and self.alias.lower() == other.lower():
+                return True
+            if self.lower() == other.lower():
+                return True
+        return False
+
+
 class AgentIntent(str, Enum):
     CHAT = "CHAT"
     OPEN_APPLICATION = "OPEN_APPLICATION"
@@ -31,6 +49,7 @@ class AgentIntent(str, Enum):
     HELP_WITH_CODE = "HELP_WITH_CODE"
     CALL_CONTACT = "CALL_CONTACT"
     SEND_MESSAGE = "SEND_MESSAGE"
+    FIX_CODE = "FIX_CODE"
     UNKNOWN = "UNKNOWN"
 
 class PlannedAction(BaseModel):

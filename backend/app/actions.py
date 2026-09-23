@@ -17,13 +17,17 @@ SAFE_ACTIONS = {
     "click_screen",
     "type_text",
     "press_key",
-    "scroll_screen"
+    "scroll_screen",
+    "apply_code_fix",
+    "safe_code_edit"
 }
 
 ALLOWED_APPLICATIONS = {
     "calculator": "calc.exe",
     "notepad": "notepad.exe",
-    "paint": "mspaint.exe"
+    "paint": "mspaint.exe",
+    "chrome": "chrome.exe",
+    "google chrome": "chrome.exe"
 }
 
 def execute_safe_action(action: str, params: Dict[str, Any], original_command: str = "") -> Dict[str, Any]:
@@ -95,8 +99,21 @@ def execute_safe_action(action: str, params: Dict[str, Any], original_command: s
             app_key = params.get("app_name", "").strip().lower()
             if app_key in ALLOWED_APPLICATIONS:
                 exe = ALLOWED_APPLICATIONS[app_key]
-                subprocess.Popen([exe], shell=False)
-                return {"success": True, "result": f"Launched {app_key} ({exe}) safely."}
+                if "chrome" in app_key:
+                    chrome_candidates = [
+                        Path(os.environ.get("ProgramFiles", "C:\\Program Files")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+                        Path(os.environ.get("ProgramFiles(x86)", "C:\\Program Files (x86)")) / "Google" / "Chrome" / "Application" / "chrome.exe",
+                        Path(os.environ.get("LocalAppData", "")) / "Google" / "Chrome" / "Application" / "chrome.exe"
+                    ]
+                    for cand in chrome_candidates:
+                        if cand.exists():
+                            exe = str(cand)
+                            break
+                try:
+                    subprocess.Popen([exe], shell=False)
+                    return {"success": True, "result": f"Launched {app_key} ({exe}) safely."}
+                except FileNotFoundError:
+                    return {"success": False, "error": f"Application binary '{exe}' not found on system."}
             else:
                 return {
                     "success": False,
@@ -230,7 +247,15 @@ def execute_safe_action(action: str, params: Dict[str, Any], original_command: s
                     return {"success": False, "error": f"Failed to execute scroll: {str(e)}"}
 
             # Simulation fallback
-            return {"success": True, "result": f"Simulated scroll {direction} executed ({steps} steps)."}
+            return {"success": True, "result": f"Scrolled screen {direction} (simulated, {steps} steps)."}
+
+        # 13. Apply Safe Code Fix (AI Screen & Code Assistant)
+        elif action in ("apply_code_fix", "safe_code_edit"):
+            from .agent.coding_assistant import apply_safe_code_fix
+            target_file = params.get("target_file", "")
+            fixed_code = params.get("fixed_code", "")
+            original_code = params.get("original_code", "")
+            return apply_safe_code_fix(target_file, fixed_code, original_code)
 
         return {"success": False, "error": f"Unhandled action: {action}"}
         

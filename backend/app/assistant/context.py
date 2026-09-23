@@ -9,6 +9,8 @@ class ConversationContext:
         self.last_topic: Optional[str] = None
         self.pending_action: Optional[Dict[str, Any]] = None
         self.pending_action_time: float = 0.0
+        self.last_proposed_fix: Optional[Dict[str, Any]] = None
+        self.last_error_context: Optional[Dict[str, Any]] = None
 
     def add_turn(self, user_msg: str, assistant_msg: str, topic: Optional[str] = None):
         self.history.append({"user": user_msg, "assistant": assistant_msg})
@@ -16,6 +18,21 @@ class ConversationContext:
             self.history.pop(0)
         if topic:
             self.last_topic = topic
+
+    def set_proposed_fix(self, fix_dict: Dict[str, Any]):
+        self.last_proposed_fix = fix_dict
+
+    def get_proposed_fix(self) -> Optional[Dict[str, Any]]:
+        return self.last_proposed_fix
+
+    def clear_proposed_fix(self):
+        self.last_proposed_fix = None
+
+    def set_error_context(self, error_dict: Dict[str, Any]):
+        self.last_error_context = error_dict
+
+    def get_error_context(self) -> Optional[Dict[str, Any]]:
+        return self.last_error_context
 
     def set_pending_action(self, action_dict: Dict[str, Any]):
         self.pending_action = action_dict

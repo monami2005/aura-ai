@@ -17,12 +17,30 @@ def detect_structured_intent(query: str, language: str = "en") -> Tuple[AgentInt
     q_clean = query.strip()
     q_lower = q_clean.lower()
 
-    # 1. Screen Error & Screen Awareness Detection
-    # E.g., "Ei error ta bujhiye dao", "Ei error ta ki?", "What is this error?", "What is on my screen?"
+    # 0. Code Fix & Modification Requests
+    # E.g., "Eta fix kore dao", "Fix korar age amake dekhao", "fix this error", "ঠিক করে দাও"
+    if any(k in q_lower or k in q_clean for k in [
+        "fix kore dao", "eta fix kore dao", "eta fix koro", "fix it", "fix this", "fix code",
+        "apply fix", "apply this fix", "please fix it", "fix korar age", "amake dekhao",
+        "show me the fix", "show fix", "ঠিক করে দাও", "কোড ঠিক করো", "ফিক্স করে দাও",
+        "আগে আমাকে দেখাও", "সংশোধন করো", "इसे ठीक करो", "कोड ठीक करो", "फिक्स करो"
+    ]):
+        return AgentIntent.FIX_CODE, {"command": q_clean}
+
+    # 1. Screen Error & Code Check Detection
+    # E.g., "Ei error ta bujhiye dao", "Ei error ta ki?", "Amar code ta check koro", "Eta keno hocche?", "Easy kore bojhao"
+    if any(k in q_lower or k in q_clean for k in [
+        "amar code ta check koro", "code ta check koro", "amar code ta dekho", "amar code check",
+        "check my code", "check this code", "আমার কোড", "কোডটা চেক করো", "कोड चेक करो",
+        "review my code", "review this code"
+    ]):
+        return AgentIntent.HELP_WITH_CODE, {"question": q_clean, "focus": "code_review"}
+
     if any(k in q_lower or k in q_clean for k in [
         "ei error", "error ta", "এই এরর", "এই error", "error ta ki", "error ta bujhiye dao",
         "yeh error", "ye error", "यह एरर", "एरर क्या है", "what is this error", "explain visible error",
-        "look at this error", "screen error"
+        "look at this error", "screen error", "eta keno hocche", "keno hocche", "why is this happening",
+        "easy kore bojhao", "সহজ করে বোঝাও", "सरल भाषा में समझाओ", "explain simply", "easy kore"
     ]):
         return AgentIntent.ANALYZE_ERROR, {"question": q_clean, "focus": "error"}
 
@@ -52,14 +70,22 @@ def detect_structured_intent(query: str, language: str = "en") -> Tuple[AgentInt
     # 3. Application Launch
     # E.g., "Chrome kholo", "Chrome open koro", "Launch calculator", "Notepad kholo", "कैलकुलेटर खोलो"
     app_patterns = [
-        r"(chrome|google chrome|calculator|notepad|paint)\s+(?:kholo|open koro|khol|chalu koro|khojo|खोलो|खोलें|খোল|খোলো)",
-        r"(?:open|launch|start)\s+(chrome|google chrome|calculator|notepad|paint)\b",
+        r"(chrome|google chrome|calculator|notepad|paint|कैलकुलेटर|क्रोम|नोटपैड|ক্যালকুলেটর|নোটপ্যাড)\s+(?:kholo|open koro|khol|chalu koro|khojo|खोलो|खोलें|খোল|খোলো)",
+        r"(?:open|launch|start|खोलो|খোল)\s+(chrome|google chrome|calculator|notepad|paint|कैलकुलेटर|क्रोम|नोटपैड|ক্যালকুলেটর|নোটপ্যাড)\b",
         r"(?:application|app)\s+(chrome|calculator|notepad|paint)",
     ]
     for ap in app_patterns:
         m = re.search(ap, q_clean, re.IGNORECASE)
         if m:
-            app_name = m.group(1).lower().strip()
+            raw_app = m.group(1).lower().strip()
+            name_map = {
+                "कैलकुलेटर": "calculator",
+                "ক্যালকুলেটর": "calculator",
+                "क्रोम": "chrome",
+                "नोटपैड": "notepad",
+                "নোটপ্যাড": "notepad"
+            }
+            app_name = name_map.get(raw_app, raw_app)
             return AgentIntent.OPEN_APPLICATION, {"app_name": app_name}
 
     # 4. Website Launch
@@ -75,20 +101,23 @@ def detect_structured_intent(query: str, language: str = "en") -> Tuple[AgentInt
 
     # 6. File & Folder Operations
     # 6a. Create folder: "create folder named AURA", "folder banao Test", "একটি ফোল্ডার বানাও Notes"
-    if any(k in q_lower or k in q_clean for k in ["create folder", "make folder", "folder banao", "folder banate", "ফোল্ডার তৈরি", "फ़ोल्डर बना"]):
-        parts = re.split(r"named|name|banao|banate|ফোল্ডার|फ़ोल्डर", q_clean, flags=re.IGNORECASE)
+    if any(k in q_lower or k in q_clean for k in ["create folder", "make folder", "folder banao", "folder banate", "ফোল্ডার বানাও", "ফোল্ডার তৈরি", "फ़ोल्डर बना", "फोल्डर बना"]):
+        parts = re.split(r"named|name|banao|banate|বানাও|তৈরি করো|ফোল্ডার|फ़ोल्डर|फोल्डर", q_clean, flags=re.IGNORECASE)
         candidate = parts[-1].strip().strip("'\"").strip() if len(parts) > 1 else "New_Aura_Folder"
         folder_name = candidate or "New_Aura_Folder"
         return AgentIntent.CREATE_FOLDER, {"folder_name": folder_name}
 
-    # 6b. Find file: "find my notes.txt file", "find file app.py", "notes.txt file ta khojo"
-    if any(k in q_lower or k in q_clean for k in ["find file", "find my", "search file", "file ta khojo", "file khojo", "फ़ाइल खोज", "ফাইল খোঁজো"]):
+    # 6b. Find file: "find my notes.txt file", "find file app.py", "notes.txt file ta khojo", "Amar notes.txt file ta khuje dao"
+    if any(k in q_lower or k in q_clean for k in [
+        "find file", "find my", "search file", "file ta khojo", "file khojo",
+        "khuje dao", "khuje", "khujo", "dhoondo", "dhoondho", "फ़ाइल खोज", "ফাইল খোঁজো", "খুঁজে দাও", "খুঁজে"
+    ]):
         # Extract filename (e.g. word with extension or word after find)
         file_match = re.search(r"([a-zA-Z0-9_\-]+\.[a-zA-Z0-9]{1,5})", q_clean)
         if file_match:
             filename = file_match.group(1)
         else:
-            parts = re.split(r"find file|find my|search file|file|khojo", q_clean, flags=re.IGNORECASE)
+            parts = re.split(r"find file|find my|search file|file|khojo|khuje dao|khuje|khujo|dhoondo", q_clean, flags=re.IGNORECASE)
             filename = parts[-1].strip().strip("'\"") if len(parts) > 1 else "document.txt"
         return AgentIntent.FIND_FILE, {"filename": filename or "document.txt"}
 
@@ -155,8 +184,18 @@ def detect_structured_intent(query: str, language: str = "en") -> Tuple[AgentInt
     if ("call" in q_lower and "code" not in q_lower) or "কল করো" in q_clean or "कॉल करो" in q_clean:
         return AgentIntent.CALL_CONTACT, {"contact": "Contact", "raw": q_clean}
 
-    if "message" in q_lower or "মেসেজ" in q_clean or "मैसेज" in q_clean or "संदेश" in q_clean:
-        return AgentIntent.SEND_MESSAGE, {"contact": "Contact", "raw": q_clean}
+    if (
+        any(k in q_lower for k in ["message", "whatsapp", "messenger", "instagram", "text "])
+        or any(k in q_clean for k in ["মেসেজ", "ম্যাসেজ", "संदेश", "मैसेज", "হোয়াটসঅ্যাপ", "व्हाट्सएप"])
+    ):
+        plat = "phone"
+        if "whatsapp" in q_lower or "হোয়াটসঅ্যাপ" in q_clean or "व्हाट्सएप" in q_clean:
+            plat = "whatsapp"
+        elif "messenger" in q_lower or "মেসেঞ্জার" in q_clean or "मैसेंजर" in q_clean:
+            plat = "messenger"
+        elif "instagram" in q_lower or "ইন্সটাগ্রাম" in q_clean or "इंस्टाग्राम" in q_clean:
+            plat = "instagram"
+        return AgentIntent.SEND_MESSAGE, {"contact": "Contact", "platform": plat, "raw": q_clean}
 
     # 10. Default / Small Talk / Conversational Knowledge
     return AgentIntent.CHAT, {"message": q_clean}

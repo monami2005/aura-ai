@@ -1,6 +1,6 @@
 import re
 from typing import Dict, Any, Optional
-from .models import AgentIntent, ActionRiskLevel, PlannedAction
+from .models import AgentIntent, ActionRiskLevel, PlannedAction, AgentIntentStr
 from .permissions import PermissionManager
 from .intents import detect_structured_intent
 from .verifier import verify_action_execution
@@ -50,9 +50,21 @@ class AuraAgentPipeline:
 
             # Cautious diagnostic wording for error queries
             if intent == AgentIntent.ANALYZE_ERROR:
-                cautious_summary = f"Visual Error Diagnostic: This appears to be related to visible application state. {screen_res.summary}"
+                code_diag = analyze_code_or_error(
+                    query=msg_clean,
+                    code=None,
+                    language=language,
+                    screen_context=f"{screen_res.summary} {screen_res.details or ''} {screen_res.visible_text or ''}"
+                )
+                if code_diag.get("proposed_fix"):
+                    context.set_proposed_fix(code_diag["proposed_fix"])
+                context.set_error_context(code_diag)
+
+                cautious_summary = f"Visual Error Diagnostic: This appears to be related to visible application state. {screen_res.summary}\n\n{code_diag['response']}"
+                voice_out = code_diag.get("voice_summary", "I analyzed the visible error. Say 'Eta fix kore dao' to review and apply the fix.")
             else:
                 cautious_summary = screen_res.summary
+                voice_out = "I analyzed what is visible on your screen."
 
             # Auto-log read-only operation
             add_action_history(
@@ -78,12 +90,17 @@ class AuraAgentPipeline:
                 "sources": [],
                 "requires_confirmation": False,
                 "response": cautious_summary,
+                "voice_response": voice_out,
+                "proposed_fix": code_diag.get("proposed_fix") if intent == AgentIntent.ANALYZE_ERROR else None,
                 "executable": False
             }
 
-        # 2b. Coding Assistant Diagnostics
+        # 2b. Coding Assistant Diagnostics ("Amar code ta check koro")
         if intent == AgentIntent.HELP_WITH_CODE:
             code_res = analyze_code_or_error(msg_clean, None, language)
+            if code_res.get("proposed_fix"):
+                context.set_proposed_fix(code_res["proposed_fix"])
+            context.set_error_context(code_res)
             context.add_turn(msg_clean, code_res["response"], topic="coding_help")
             return {
                 "type": "question",
@@ -96,8 +113,80 @@ class AuraAgentPipeline:
                 "sources": [],
                 "requires_confirmation": False,
                 "response": code_res["response"],
+                "voice_response": code_res.get("voice_summary"),
+                "proposed_fix": code_res.get("proposed_fix"),
                 "executable": False
             }
+
+        # 2c. Safe Code Fix Flow ("Eta fix kore dao", "Fix korar age amake dekhao")
+        if intent == AgentIntent.FIX_CODE:
+            prop_fix = context.get_proposed_fix()
+            if not prop_fix:
+                # Direct check if not pre-cached
+                code_res = analyze_code_or_error(msg_clean, None, language)
+                prop_fix = code_res.get("proposed_fix")
+                if prop_fix:
+                    context.set_proposed_fix(prop_fix)
+
+            if prop_fix:
+                target_file = prop_fix.get("target_file", "sample_bug.py")
+                rel_file = prop_fix.get("relative_file", "sample_bug.py")
+                diff = prop_fix.get("diff", "")
+                prob = prop_fix.get("problem", "detected code issue")
+
+                confirm_prompt = (
+                    f"🛡️ **Proposed Code Fix for {prob}**\n\n"
+                    f"📁 **File to Edit**: `{rel_file}`\n\n"
+                    f"🔍 **Proposed Changes**:\n"
+                    f"```diff\n"
+                    f"{diff}\n"
+                    f"```\n\n"
+                    f"⚠️ **Confirmation Required**: Would you like AURA to apply this fix to `{rel_file}`?\n"
+                    f"Say **\"Okay\" / \"Yes\"** to Allow, or **\"Cancel\" / \"No\"** to Abort."
+                )
+
+                fix_params = {
+                    "target_file": target_file,
+                    "relative_file": rel_file,
+                    "original_code": prop_fix.get("original_code", ""),
+                    "fixed_code": prop_fix.get("fixed_code", ""),
+                    "diff": diff,
+                    "problem": prob
+                }
+
+                return {
+                    "type": "action",
+                    "intent": intent.value,
+                    "action": "apply_code_fix",
+                    "platform": None,
+                    "params": fix_params,
+                    "risk_level": ActionRiskLevel.CONFIRM.value,
+                    "target": rel_file,
+                    "reason": f"Modifying source code in '{rel_file}' requires explicit user confirmation.",
+                    "sources": [],
+                    "requires_confirmation": True,
+                    "executable": True,
+                    "response": confirm_prompt,
+                    "explanation": confirm_prompt,
+                    "voice_response": "Your approval is required to apply the code fix.",
+                    "proposed_fix": prop_fix
+                }
+            else:
+                no_fix_msg = "No active error or code issue was found to fix. Say 'Ei error ta ki?' or 'Amar code ta check koro' first."
+                return {
+                    "type": "question",
+                    "intent": intent.value,
+                    "platform": None,
+                    "params": params,
+                    "risk_level": ActionRiskLevel.SAFE.value,
+                    "target": "code fix",
+                    "reason": "No code fix available.",
+                    "sources": [],
+                    "requires_confirmation": False,
+                    "response": no_fix_msg,
+                    "voice_response": no_fix_msg,
+                    "executable": False
+                }
 
         # 2c. Passive File Operations (Read, Find, Summarize)
         if intent == AgentIntent.FIND_FILE:
@@ -151,7 +240,20 @@ class AuraAgentPipeline:
                 "executable": False
             }
 
-        # 2d. State-Mutating Computer & Communication Actions (Permission & Confirmation Required)
+        # 2d. Clarification for underspecified communication commands
+        if intent == AgentIntent.SEND_MESSAGE and msg_clean.lower() in ("send a message", "send message", "message", "মেসেজ পাঠাও", "मैसेज भेजो"):
+            return {
+                "type": "clarification",
+                "intent": intent.value,
+                "platform": None,
+                "params": params,
+                "sources": [],
+                "requires_confirmation": False,
+                "response": "Who would you like to send a message to, and via which platform (Phone, WhatsApp, Messenger, or Instagram)?",
+                "executable": False
+            }
+
+        # 2e. State-Mutating Computer & Communication Actions (Permission & Confirmation Required)
         action_mapping = {
             AgentIntent.OPEN_APPLICATION: ("open_application", params.get("app_name", "App")),
             AgentIntent.OPEN_WEBSITE: ("open_website", params.get("url", "https://www.google.com")),
@@ -185,7 +287,7 @@ class AuraAgentPipeline:
 
             action_dict = {
                 "type": "communication" if "message" in action_name or "call" in action_name else "action",
-                "intent": intent.value,
+                "intent": AgentIntentStr(intent.value, alias=action_name),
                 "action": action_name,
                 "platform": params.get("platform", "phone") if "message" in action_name or "call" in action_name else None,
                 "params": params,
